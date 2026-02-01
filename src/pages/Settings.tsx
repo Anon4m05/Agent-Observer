@@ -1,18 +1,73 @@
+import { useState, useEffect } from 'react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { supabase } from '@/integrations/supabase/client';
+import { moltbookApi } from '@/lib/api/moltbook';
+import { toast } from 'sonner';
 import {
   Settings as SettingsIcon,
   Zap,
   Clock,
   Database,
   User,
+  CheckCircle,
+  Loader2,
 } from 'lucide-react';
 
 export default function Settings() {
+  const [stats, setStats] = useState({ posts: 0, agents: 0, comments: 0 });
+  const [testingConnection, setTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'unknown' | 'connected' | 'error'>('unknown');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadStats();
+  }, []);
+
+  const loadStats = async () => {
+    setLoading(true);
+    try {
+      const [postsRes, agentsRes, commentsRes] = await Promise.all([
+        supabase.from('posts').select('id', { count: 'exact', head: true }),
+        supabase.from('agents').select('id', { count: 'exact', head: true }),
+        supabase.from('comments').select('id', { count: 'exact', head: true }),
+      ]);
+
+      setStats({
+        posts: postsRes.count || 0,
+        agents: agentsRes.count || 0,
+        comments: commentsRes.count || 0,
+      });
+    } catch (error) {
+      console.error('Failed to load stats:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTestingConnection(true);
+    try {
+      const result = await moltbookApi.testConnection();
+      if (result.connected) {
+        setConnectionStatus('connected');
+        toast.success('Firecrawl connection verified');
+      } else {
+        setConnectionStatus('error');
+        toast.error(result.error || 'Connection failed');
+      }
+    } catch (error) {
+      setConnectionStatus('error');
+      toast.error('Failed to test connection');
+    } finally {
+      setTestingConnection(false);
+    }
+  };
+
   return (
     <AppLayout>
       <div className="space-y-6 max-w-4xl">
@@ -31,25 +86,47 @@ export default function Settings() {
         <Card className="border-border/50">
           <CardHeader>
             <CardTitle className="font-mono text-lg flex items-center gap-2">
-              <Zap className="h-5 w-5 text-terminal-amber" />
+              <Zap className="h-5 w-5 text-primary" />
               Data Source Connection
             </CardTitle>
             <CardDescription>
-              Connect to Firecrawl for web scraping capabilities
+              Firecrawl web scraping integration
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="rounded-md border border-dashed border-border p-6 text-center">
-              <Zap className="mx-auto h-10 w-10 text-muted-foreground/50 mb-3" />
-              <h3 className="font-mono text-sm font-medium mb-1">
-                Firecrawl Not Connected
-              </h3>
-              <p className="text-xs text-muted-foreground mb-4">
-                Connect Firecrawl to enable Moltbook data collection
-              </p>
-              <Button variant="outline" className="font-mono">
-                Connect Firecrawl
-              </Button>
+            <div className="rounded-md border border-border p-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-medium">Firecrawl</span>
+                    {connectionStatus === 'connected' && (
+                      <span className="flex items-center gap-1 text-xs font-mono text-primary">
+                        <CheckCircle className="h-3 w-3" />
+                        Verified
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Web scraping API for Moltbook data collection
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="flex items-center gap-2 text-xs font-mono text-primary">
+                    <span className="h-2 w-2 rounded-full bg-primary" />
+                    Connected
+                  </span>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="font-mono"
+                    onClick={handleTestConnection}
+                    disabled={testingConnection}
+                  >
+                    {testingConnection && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
+                    Test
+                  </Button>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -89,7 +166,7 @@ export default function Settings() {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Connect Firecrawl to enable scheduled polling
+                Scheduled polling coming soon
               </p>
             </div>
           </CardContent>
@@ -109,15 +186,21 @@ export default function Settings() {
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
               <div className="rounded-md bg-muted/30 p-4">
-                <p className="font-mono text-2xl font-bold text-primary">0</p>
+                <p className="font-mono text-2xl font-bold text-primary">
+                  {loading ? '-' : stats.posts.toLocaleString()}
+                </p>
                 <p className="text-xs text-muted-foreground">Posts stored</p>
               </div>
               <div className="rounded-md bg-muted/30 p-4">
-                <p className="font-mono text-2xl font-bold text-terminal-cyan">0</p>
+                <p className="font-mono text-2xl font-bold text-terminal-cyan">
+                  {loading ? '-' : stats.agents.toLocaleString()}
+                </p>
                 <p className="text-xs text-muted-foreground">Agents tracked</p>
               </div>
               <div className="rounded-md bg-muted/30 p-4">
-                <p className="font-mono text-2xl font-bold text-terminal-purple">0</p>
+                <p className="font-mono text-2xl font-bold text-terminal-purple">
+                  {loading ? '-' : stats.comments.toLocaleString()}
+                </p>
                 <p className="text-xs text-muted-foreground">Comments archived</p>
               </div>
             </div>
