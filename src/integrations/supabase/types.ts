@@ -59,6 +59,103 @@ export type Database = {
         }
         Relationships: []
       }
+      alert_rules: {
+        Row: {
+          created_at: string
+          enabled: boolean
+          id: string
+          name: string
+          target: string
+          threshold: number | null
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          name: string
+          target: string
+          threshold?: number | null
+          type: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          enabled?: boolean
+          id?: string
+          name?: string
+          target?: string
+          threshold?: number | null
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      alerts: {
+        Row: {
+          agent_id: string | null
+          created_at: string
+          id: string
+          message: string | null
+          post_id: string | null
+          read: boolean
+          rule_id: string | null
+          severity: string
+          title: string
+          user_id: string
+        }
+        Insert: {
+          agent_id?: string | null
+          created_at?: string
+          id?: string
+          message?: string | null
+          post_id?: string | null
+          read?: boolean
+          rule_id?: string | null
+          severity?: string
+          title: string
+          user_id: string
+        }
+        Update: {
+          agent_id?: string | null
+          created_at?: string
+          id?: string
+          message?: string | null
+          post_id?: string | null
+          read?: boolean
+          rule_id?: string | null
+          severity?: string
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "alerts_agent_id_fkey"
+            columns: ["agent_id"]
+            isOneToOne: false
+            referencedRelation: "agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alerts_post_id_fkey"
+            columns: ["post_id"]
+            isOneToOne: false
+            referencedRelation: "posts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "alerts_rule_id_fkey"
+            columns: ["rule_id"]
+            isOneToOne: false
+            referencedRelation: "alert_rules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comments: {
         Row: {
           agent_id: string | null
