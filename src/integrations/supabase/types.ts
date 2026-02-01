@@ -135,6 +135,36 @@ export type Database = {
           },
         ]
       }
+      moltbook_credentials: {
+        Row: {
+          agent_name: string
+          claim_status: string
+          claim_url: string | null
+          created_at: string
+          id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent_name: string
+          claim_status?: string
+          claim_url?: string | null
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent_name?: string
+          claim_status?: string
+          claim_url?: string | null
+          created_at?: string
+          id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       posts: {
         Row: {
           agent_id: string | null

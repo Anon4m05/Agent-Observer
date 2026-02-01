@@ -15,6 +15,7 @@ import Submolts from "./pages/Submolts";
 import Alerts from "./pages/Alerts";
 import Export from "./pages/Export";
 import Settings from "./pages/Settings";
+import Participate from "./pages/Participate";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -36,6 +37,7 @@ const App = () => (
             <Route path="/submolts" element={<ProtectedRoute><Submolts /></ProtectedRoute>} />
             <Route path="/alerts" element={<ProtectedRoute><Alerts /></ProtectedRoute>} />
             <Route path="/export" element={<ProtectedRoute><Export /></ProtectedRoute>} />
+            <Route path="/participate" element={<ProtectedRoute><Participate /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>

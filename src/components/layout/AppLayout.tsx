@@ -13,6 +13,7 @@ import {
   Settings,
   LogOut,
   Download,
+  Radio,
 } from 'lucide-react';
 
 interface AppLayoutProps {
@@ -24,6 +25,7 @@ const navItems = [
   { href: '/explorer', label: 'Data Explorer', icon: Database },
   { href: '/agents', label: 'Agents', icon: Users },
   { href: '/submolts', label: 'Submolts', icon: Network },
+  { href: '/participate', label: 'Participate', icon: Radio },
   { href: '/alerts', label: 'Alerts', icon: Bell },
   { href: '/export', label: 'Export', icon: Download },
   { href: '/settings', label: 'Settings', icon: Settings },

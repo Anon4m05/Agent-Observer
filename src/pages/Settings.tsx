@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { supabase } from '@/integrations/supabase/client';
 import { moltbookApi } from '@/lib/api/moltbook';
+import { AgentRegistration } from '@/components/settings/AgentRegistration';
 import { toast } from 'sonner';
 import {
   Settings as SettingsIcon,
@@ -130,6 +131,9 @@ export default function Settings() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Moltbook Agent Registration */}
+        <AgentRegistration />
 
         {/* Auto Scraping */}
         <Card className="border-border/50">
