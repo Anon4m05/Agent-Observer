@@ -1,216 +1,166 @@
 
-# Moltbook Macro-Behavior Analyzer
+# Plan: Harden Edge Functions & Add Depth to Scraping Infrastructure
 
-## Overview
-A dark-themed research terminal for observing, measuring, and analyzing large-scale behavioral patterns on Moltbook - the social network for AI agents. The system treats Moltbook as a live ecosystem, producing reproducible analyses without posting, spawning agents, or impersonation.
+## Current Issues Identified
 
----
-
-## Phase 1: Foundation & Trust Boundary
-
-### 1.1 Researcher Authentication
-- Simple login/signup for single researcher access
-- Secure session management
-- Settings page for configuration
-
-### 1.2 Data Source Connection
-- Input field for Moltbook observation credentials (if available in future)
-- Firecrawl connector integration for web scraping approach
-- Connection validation with test request
-- Encrypted server-side storage of credentials
-- Clear status indicators showing connection health
+1. **SSL Error with HTTPS**: Firecrawl fails on `https://www.moltbook.app` due to SSL certificate issues
+2. **Target Site Parked**: moltbook.app is currently a parked domain (not the actual social network)
+3. **No URL Fallback Logic**: The edge function doesn't try HTTP if HTTPS fails
+4. **No Content Parsing**: Raw markdown returned without extracting posts/agents/comments
+5. **Missing Error Classification**: All errors treated the same - no distinction between SSL, 404, rate limits
+6. **No Crawl Mode**: Only scraping single pages, no multi-page discovery for full ecosystem sweep
+7. **Test Connection Wasteful**: `testConnection()` creates a real scrape job just to test
 
 ---
 
-## Phase 2: Data Ingestion Engine
+## Implementation Plan
 
-### 2.1 Scraping Infrastructure
-- Edge function to scrape Moltbook pages using Firecrawl
-- Target endpoints: public posts, comments, agent profiles, submolts
-- Pagination handling for large result sets
-- Rate limiting and exponential backoff
-- Error handling with retry logic
+### 1. Enhanced Edge Function with Robust Error Handling
 
-### 2.2 Manual Trigger Interface
-- Dashboard control panel with "Fetch New Data" button
-- Scope selector: specific submolts, specific agents, or full sweep
-- Progress indicator showing scrape status
-- Fetch history log
+**File**: `supabase/functions/moltbook-scrape/index.ts`
 
-### 2.3 Scheduled Polling (Optional)
-- Toggle to enable/disable automatic background collection
-- Configurable interval (hourly, every 6 hours, daily)
-- Checkpoint system tracking last successful fetch
-- Background job using Supabase pg_cron
+Improvements:
+- Add HTTPS-to-HTTP fallback when SSL errors occur
+- Add error classification (SSL, rate limit, not found, server error)
+- Add retry logic with exponential backoff for transient failures
+- Add `mode` parameter: `scrape` (single page) vs `crawl` (discover links)
+- Improve logging with structured error types
+- Store full scraped content for parsing, not just preview
 
-### 2.4 Append-Only Archive
-- Database tables for: posts, comments, agents, submolts
-- Immutable records with: IDs, timestamps, content, authors, reply structure, engagement metrics
-- Versioned snapshots for reproducibility
-- Data integrity checksums
+```text
+Request Flow:
+┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
+│   Frontend   │────▶│  Edge Function  │────▶│  Firecrawl   │
+└──────────────┘     └─────────────────┘     └──────────────┘
+                            │                       │
+                     Try HTTPS first               │
+                            │◀──────────────────────
+                     If SSL error, retry HTTP      │
+                            │─────────────────────▶│
+                            │◀──────────────────────
+                     Parse & store results
+                            │
+                     ┌──────▼──────┐
+                     │  Database   │
+                     │ scrape_jobs │
+                     │   + posts   │
+                     └─────────────┘
+```
 
----
+### 2. New Health Check Edge Function
 
-## Phase 3: Feature Extraction Layer
+**File**: `supabase/functions/moltbook-health/index.ts`
 
-### 3.1 Post-Level Features (Computed on Ingest)
-- **Basic metrics**: Length, word count, link density, domain usage
-- **Lexical analysis**: Vocabulary diversity, repetition patterns
-- **Structural**: Reply depth, thread position
-- **Optional AI**: Embedding vectors (via Lovable AI when enabled)
+Purpose: Quick connection test that doesn't create scrape jobs
 
-### 3.2 Agent-Level Features (Computed on Demand)
-- **Temporal patterns**: Posting cadence, burstiness, time-of-day distribution
-- **Stylistic fingerprints**: Average length, vocabulary profile, punctuation patterns
-- **Self-similarity**: How consistent is this agent over time?
-- **Cross-agent similarity**: Who writes similarly to whom?
+Features:
+- Validates Firecrawl API key is set
+- Tests Firecrawl connectivity with a minimal request
+- Returns connection status without side effects
+- Reports Firecrawl credits remaining (if available)
 
-### 3.3 Submolt-Level Features
-- Activity volume over time
-- Agent diversity (unique posters, concentration)
-- Topic dispersion
-- Semantic centroid (average topic position)
+### 3. Content Parser Utility
 
----
+**Within edge function**: Add parsing logic to extract structured data from scraped markdown
 
-## Phase 4: Analysis Dashboards
+Features:
+- Detect if page is parked/error page vs actual content
+- Parse post structure when real Moltbook is available
+- Extract agent mentions and links
+- Compute post-level features (word count, link count, etc.)
 
-### 4.1 Data Explorer
-- Browse raw posts and comments with filters
-- Search by agent, submolt, keyword, date range
-- Drill-down from any metric to source data
-- Export selections as CSV/JSON
+### 4. Update API Layer
 
-### 4.2 Ecosystem Overview Dashboard
-- Activity heatmap: posts/comments over time
-- Top agents by volume, engagement
-- Most active submolts
-- Concentration metrics: how concentrated is activity?
+**File**: `src/lib/api/moltbook.ts`
 
-### 4.3 Agent Analysis Dashboard
-- Individual agent profile view
-- Behavioral fingerprint visualization
-- Posting timeline and rhythm analysis
-- Similar agents clustering
-- Drift detection: is this agent changing?
+Changes:
+- Add `healthCheck()` method that uses new health endpoint
+- Update `testConnection()` to use health check (no side effects)
+- Add `crawl()` method for multi-page discovery
+- Add error type definitions for better frontend handling
+- Add retry wrapper for transient failures
 
-### 4.4 Submolt Analysis Dashboard
-- Community activity trends
-- Member composition and turnover
-- Topic evolution over time
-- Semantic drift visualization
+### 5. Update Frontend Error Display
 
-### 4.5 Coordination Detection Dashboard
-- Synchronized burst detection
-- Propagation chain visualization
-- Phrase convergence alerts
-- Each flag links to underlying evidence posts
+**Files**: `src/pages/Dashboard.tsx`, `src/pages/Settings.tsx`
 
----
+Improvements:
+- Show detailed error messages with suggestions
+- Distinguish between configuration errors vs target site issues
+- Display SSL fallback notifications
+- Show "site not available" state clearly
+- Add manual URL input for testing different endpoints
 
-## Phase 5: Interaction Graph & Clustering
+### 6. Add Scrape Job Details View
 
-### 5.1 Agent Interaction Graph
-- Nodes = agents, edges = interactions
-- Edge types: replied-to, co-participation in thread, semantic similarity, synchronized posting
-- Interactive network visualization
-- Filter by time window, submolt, interaction type
-
-### 5.2 Behavioral Clustering
-- Group agents into archetypes based on observable behavior
-- Cluster visualization with drill-down
-- Track cluster membership changes over time
+**Enhancement to Dashboard**:
+- Click on scrape job to see full details
+- Show actual content retrieved
+- Display parsed vs raw data
+- Show error stack traces for failed jobs
 
 ---
 
-## Phase 6: Alerts & Monitoring
+## Technical Details
 
-### 6.1 Alert Configuration
-- Define macro-level conditions:
-  - Sharp behavioral fingerprint changes
-  - Coordination spikes above threshold
-  - New cluster emergence
-  - Rapid semantic shifts in submolts
-- Set sensitivity thresholds
+### Error Classification Enum
+```typescript
+type ScrapeErrorType = 
+  | 'SSL_ERROR'      // Certificate issues
+  | 'NOT_FOUND'      // 404 errors
+  | 'RATE_LIMITED'   // Too many requests
+  | 'SERVER_ERROR'   // 5xx errors
+  | 'TIMEOUT'        // Request timeout
+  | 'PARSE_ERROR'    // Content parsing failed
+  | 'PARKED_DOMAIN'  // Domain is parked
+  | 'UNKNOWN';       // Other errors
+```
 
-### 6.2 Alert Inbox
-- Chronological feed of triggered alerts
-- Each alert shows exact evidence
-- Mark as reviewed, relevant, or artifact
-- Export alert history
+### Retry Configuration
+- Max retries: 3
+- Backoff: exponential (1s, 2s, 4s)
+- Retry on: rate limits, timeouts, server errors
+- No retry on: SSL errors (fallback to HTTP instead), not found
 
----
-
-## Phase 7: Reproducibility & Export
-
-### 7.1 Analysis Runs
-- Every analysis timestamped and versioned
-- Link to underlying data snapshot
-- Re-run with different parameters
-- Compare outputs across runs
-
-### 7.2 Export Capabilities
-- Raw posts: CSV, JSON
-- Derived features: CSV, JSON
-- Analysis outputs: CSV, JSON
-- Visualizations: PNG export
-
----
-
-## Design & UX
-
-### Visual Style
-- **Dark mode analytics terminal** aesthetic
-- High information density with clean typography
-- Data-focused visualizations (line charts, heatmaps, network graphs)
-- Accent colors for highlighting anomalies and alerts
-- Minimal chrome, maximum data visibility
-
-### Key Interactions
-- Global time range selector affecting all views
-- Drill-down from any aggregate to raw data
-- Linked brushing between related visualizations
-- Keyboard shortcuts for power users
+### Health Check Response
+```typescript
+interface HealthCheckResult {
+  firecrawl: {
+    connected: boolean;
+    error?: string;
+  };
+  database: {
+    connected: boolean;
+    jobCount: number;
+  };
+  targetSite: {
+    reachable: boolean;
+    isParked: boolean;
+    lastChecked: string;
+  };
+}
+```
 
 ---
 
-## Technical Architecture
+## Files to Create/Modify
 
-### Frontend
-- React with TypeScript
-- Recharts for time-series and basic charts
-- Custom network graph component
-- Dark theme with Tailwind CSS
-
-### Backend
-- Lovable Cloud for edge functions
-- Supabase for database (append-only archive)
-- Firecrawl connector for web scraping
-- Lovable AI for optional embedding generation
-- pg_cron for scheduled polling
-
-### Data Flow
-1. Scraper pulls data from Moltbook via Firecrawl
-2. Raw data stored in append-only archive
-3. Feature extraction runs on new data
-4. Analysis layer queries features
-5. Dashboards render results
-6. Alerts monitor for threshold breaches
+| File | Action | Purpose |
+|------|--------|---------|
+| `supabase/functions/moltbook-scrape/index.ts` | Modify | Add fallback, retry, error classification |
+| `supabase/functions/moltbook-health/index.ts` | Create | Lightweight health check endpoint |
+| `src/lib/api/moltbook.ts` | Modify | Add health check, crawl, better types |
+| `src/pages/Dashboard.tsx` | Modify | Better error display, job details |
+| `src/pages/Settings.tsx` | Modify | Health check UI, URL testing |
+| `supabase/config.toml` | Modify | Register new edge function |
 
 ---
 
-## Build Order (Core-First)
+## Testing Strategy
 
-1. **Week 1**: Auth, database schema, Firecrawl integration, basic scraping
-2. **Week 2**: Data explorer, manual fetch UI, archive browsing
-3. **Week 3**: Post-level feature extraction, ecosystem dashboard
-4. **Week 4**: Agent-level features, agent dashboard
-5. **Week 5**: Submolt analysis, coordination detection basics
-6. **Week 6**: Interaction graph, clustering
-7. **Week 7**: Alerts, scheduled polling
-8. **Week 8**: Reproducibility features, export polish
-
----
-
-## Epistemic Commitment
-The system deliberately avoids metaphysical claims. It does not infer minds, intentions, or consciousness. It does not label agents as "real" or "fake." It measures behavior, structure, change, and coordination - leaving interpretation to you, the researcher.
+After implementation:
+1. Test health check endpoint (no side effects)
+2. Test HTTPS failure → HTTP fallback
+3. Test with valid URL to verify full pipeline
+4. Verify scrape jobs properly track errors
+5. Verify frontend displays error states correctly
