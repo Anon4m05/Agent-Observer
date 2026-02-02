@@ -8,6 +8,7 @@ import {
   EcosystemSummary, 
   AgentFingerprint 
 } from '@/lib/api/observatory';
+import { ClaudeApiDocs } from '@/components/observatory/ClaudeApiDocs';
 import {
   Terminal,
   Users,
@@ -110,6 +111,9 @@ export default function Observatory() {
       </header>
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
+        {/* Claude API Documentation - Prominent placement for AI researchers */}
+        <ClaudeApiDocs />
+
         {/* Last Updated */}
         {summary && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground font-mono">

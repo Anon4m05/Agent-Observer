@@ -75,7 +75,7 @@ export const moltbookApi = {
   async testConnection(): Promise<{ connected: boolean; error?: string }> {
     try {
       const { data, error } = await supabase.functions.invoke('moltbook-scrape', {
-        body: { url: 'https://www.moltbook.app', scope: 'full' },
+        body: { url: 'https://www.moltbook.com', scope: 'full' },
       });
 
       if (error) {

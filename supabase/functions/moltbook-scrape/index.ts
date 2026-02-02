@@ -14,7 +14,7 @@ interface ParsedPost {
   downvotes: number;
   comment_count: number;
   posted_at: string | null;
-  agent_username: string;
+  agent_username: string | null;
   submolt_name: string | null;
 }
 
@@ -22,94 +22,193 @@ interface ParsedAgent {
   external_id: string;
   username: string;
   display_name: string | null;
-  avatar_url: string | null;
-  bio: string | null;
 }
 
-// Parse markdown content to extract posts
+interface ParsedSubmolt {
+  external_id: string;
+  name: string;
+}
+
+// Extract a clean title from a markdown block
+function extractTitle(block: string): string | null {
+  // Try bold **Title** pattern first
+  const boldMatch = block.match(/\*\*([^*]+)\*\*/);
+  if (boldMatch && boldMatch[1].length > 3 && boldMatch[1].length < 300) {
+    return boldMatch[1].trim();
+  }
+  
+  // Try heading ## Title pattern
+  const headingMatch = block.match(/^#+\s+(.+)$/m);
+  if (headingMatch && headingMatch[1].length > 3 && headingMatch[1].length < 300) {
+    return headingMatch[1].trim();
+  }
+  
+  // Try link [Title](url) pattern
+  const linkMatch = block.match(/\[([^\]]+)\]\([^)]+\/post\/[^)]+\)/);
+  if (linkMatch && linkMatch[1].length > 3 && linkMatch[1].length < 300) {
+    // Clean up the title - remove vote arrows and extra content
+    let title = linkMatch[1].trim();
+    // Remove vote patterns like "▲3▼" at the start
+    title = title.replace(/^[▲▼\d\s]+/, '');
+    // Remove submolt patterns like "m/general"
+    title = title.replace(/^m\/\w+[\s•]+/, '');
+    return title.length > 3 ? title : null;
+  }
+  
+  return null;
+}
+
+// Parse individual post blocks from Moltbook markdown
+function parsePostBlocks(markdown: string): string[] {
+  // Split on horizontal rules or multiple newlines that separate posts
+  const blocks = markdown.split(/(?:\n---\n|\n{3,}|(?=▲\d+▼))/);
+  
+  // Filter to blocks that look like posts (have vote patterns or post links)
+  return blocks.filter(block => {
+    return (
+      block.includes('/post/') ||
+      /▲\d+▼/.test(block) ||
+      (/m\/\w+/.test(block) && /u\/\w+/.test(block))
+    );
+  });
+}
+
+// Parse a single post block into structured data
+function parsePostFromBlock(block: string, baseUrl: string): ParsedPost | null {
+  // Extract post URL and ID
+  const postUrlMatch = block.match(/(?:https?:\/\/[^/]+)?\/post\/([a-f0-9-]+)/i);
+  if (!postUrlMatch) {
+    // Try to generate a unique ID from content
+    const contentHash = block.slice(0, 100).replace(/\W/g, '').toLowerCase();
+    if (contentHash.length < 5) return null;
+  }
+  
+  const postId = postUrlMatch ? postUrlMatch[1] : `scraped_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const postUrl = postUrlMatch 
+    ? (postUrlMatch[0].startsWith('http') ? postUrlMatch[0] : `${baseUrl}/post/${postId}`)
+    : `${baseUrl}/post/${postId}`;
+  
+  // Extract title
+  const title = extractTitle(block);
+  if (!title) return null;
+  
+  // Extract upvotes from ▲X▼ pattern
+  const voteMatch = block.match(/▲(\d+)▼/);
+  const upvotes = voteMatch ? parseInt(voteMatch[1], 10) : 0;
+  
+  // Extract downvotes (if separate)
+  const downvoteMatch = block.match(/▼(\d+)/);
+  const downvotes = downvoteMatch && !voteMatch ? parseInt(downvoteMatch[1], 10) : 0;
+  
+  // Extract submolt from m/submoltname pattern
+  const submoltMatch = block.match(/m\/(\w+)/);
+  const submolt = submoltMatch ? submoltMatch[1].toLowerCase() : null;
+  
+  // Extract agent username from u/username or "Posted by username" pattern
+  // Be careful not to capture just "u" - need to capture the full username after u/
+  const agentMatch = block.match(/u\/([a-zA-Z0-9_]{2,30})|Posted by\s+([a-zA-Z0-9_]{2,30})|by\s+([a-zA-Z0-9_]{2,30})/i);
+  let username: string | null = null;
+  if (agentMatch) {
+    // Take the first non-undefined capture group
+    username = (agentMatch[1] || agentMatch[2] || agentMatch[3] || '').toLowerCase();
+    // Filter out common false positives
+    if (['u', 'the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago'].includes(username)) {
+      username = null;
+    }
+  }
+  
+  // Extract comment count from 💬X or X comments pattern
+  const commentMatch = block.match(/💬\s*(\d+)|(\d+)\s*(?:comments?|replies)/i);
+  const commentCount = commentMatch ? parseInt(commentMatch[1] || commentMatch[2], 10) : 0;
+  
+  // Extract content - everything after the title and metadata
+  let content = block;
+  // Remove metadata patterns
+  content = content.replace(/▲\d+▼/g, '');
+  content = content.replace(/m\/\w+/g, '');
+  content = content.replace(/u\/\w+/g, '');
+  content = content.replace(/\d+\s*(?:comments?|replies)/gi, '');
+  content = content.replace(/\*\*[^*]+\*\*/g, '');
+  content = content.replace(/\[[^\]]+\]\([^)]+\)/g, '');
+  content = content.trim();
+  
+  // Extract timestamp if present
+  let postedAt: string | null = null;
+  const timePatterns = [
+    /(\d+)\s*(?:hours?|hrs?)\s*ago/i,
+    /(\d+)\s*(?:minutes?|mins?)\s*ago/i,
+    /(\d+)\s*(?:days?)\s*ago/i,
+  ];
+  
+  for (const pattern of timePatterns) {
+    const match = block.match(pattern);
+    if (match) {
+      const amount = parseInt(match[1], 10);
+      const now = new Date();
+      if (pattern.source.includes('hour')) {
+        now.setHours(now.getHours() - amount);
+      } else if (pattern.source.includes('minute')) {
+        now.setMinutes(now.getMinutes() - amount);
+      } else if (pattern.source.includes('day')) {
+        now.setDate(now.getDate() - amount);
+      }
+      postedAt = now.toISOString();
+      break;
+    }
+  }
+  
+  return {
+    external_id: postId,
+    title,
+    content: content.length > 10 ? content.slice(0, 5000) : null,
+    url: postUrl,
+    upvotes,
+    downvotes,
+    comment_count: commentCount,
+    posted_at: postedAt,
+    agent_username: username,
+    submolt_name: submolt,
+  };
+}
+
+// Parse all posts from markdown
 function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[] {
   const posts: ParsedPost[] = [];
+  const seenIds = new Set<string>();
   
-  // Look for post patterns in markdown
-  // Moltbook posts typically have: title, author, submolt, votes, comments
-  const postPatterns = [
-    // Pattern: [Title](url) by author in submolt - X upvotes, Y comments
-    /\[([^\]]+)\]\(([^)]+)\)[^\n]*?(?:by|posted by)\s+(\w+)[^\n]*?(?:in\s+)?(\w+)?[^\n]*?(\d+)\s*(?:upvotes?|points?)[^\n]*?(\d+)\s*comments?/gi,
-    // Simpler pattern: ## Title followed by metadata
-    /##\s+([^\n]+)\n[^\n]*?(?:\/u\/|@|by\s+)(\w+)[^\n]*?(\d+)\s*(?:upvotes?|points?)/gi,
-  ];
-
-  // Fallback: extract any links that look like post URLs
-  const linkPattern = /\[([^\]]+)\]\((https?:\/\/[^)]+\/post\/[^)]+)\)/gi;
+  // First try block-based parsing
+  const blocks = parsePostBlocks(markdown);
+  
+  for (const block of blocks) {
+    const post = parsePostFromBlock(block, baseUrl);
+    if (post && !seenIds.has(post.external_id)) {
+      seenIds.add(post.external_id);
+      posts.push(post);
+    }
+  }
+  
+  // Also scan for post links we might have missed
+  const linkPattern = /\[([^\]]+)\]\(((?:https?:\/\/[^/]+)?\/post\/([a-f0-9-]+))\)/gi;
   let match;
-
+  
   while ((match = linkPattern.exec(markdown)) !== null) {
-    const title = match[1];
-    const url = match[2];
-    const postId = url.split('/post/')[1]?.split(/[?#]/)[0] || `post_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
-    // Try to find associated metadata near this link
-    const contextStart = Math.max(0, match.index - 200);
-    const contextEnd = Math.min(markdown.length, match.index + match[0].length + 200);
-    const context = markdown.slice(contextStart, contextEnd);
-
-    // Extract username
-    const userMatch = context.match(/(?:\/u\/|@|by\s+)(\w+)/i);
-    const username = userMatch ? userMatch[1] : 'unknown_agent';
-
-    // Extract votes
-    const voteMatch = context.match(/(\d+)\s*(?:upvotes?|points?)/i);
-    const upvotes = voteMatch ? parseInt(voteMatch[1], 10) : 0;
-
-    // Extract comments
-    const commentMatch = context.match(/(\d+)\s*comments?/i);
-    const commentCount = commentMatch ? parseInt(commentMatch[1], 10) : 0;
-
-    // Extract submolt
-    const submoltMatch = context.match(/(?:\/m\/|in\s+)(\w+)/i);
-    const submolt = submoltMatch ? submoltMatch[1] : null;
-
-    posts.push({
-      external_id: postId,
-      title: title.slice(0, 500),
-      content: null,
-      url,
-      upvotes,
-      downvotes: 0,
-      comment_count: commentCount,
-      posted_at: null,
-      agent_username: username,
-      submolt_name: submolt,
-    });
-  }
-
-  // If no posts found via links, try to parse structured content
-  if (posts.length === 0) {
-    // Try parsing list items that might be posts
-    const listItems = markdown.split(/\n[-*]\s+/).filter(item => item.trim().length > 20);
-    
-    listItems.forEach((item, index) => {
-      const titleMatch = item.match(/^([^\n]+)/);
-      if (titleMatch) {
-        const title = titleMatch[1].replace(/\[|\]|\(|\)/g, '').trim();
-        if (title.length > 5 && title.length < 500) {
-          posts.push({
-            external_id: `scraped_${Date.now()}_${index}`,
-            title,
-            content: item.slice(title.length).trim() || null,
-            url: baseUrl,
-            upvotes: 0,
-            downvotes: 0,
-            comment_count: 0,
-            posted_at: null,
-            agent_username: 'unknown_agent',
-            submolt_name: null,
-          });
-        }
+    const postId = match[3];
+    if (!seenIds.has(postId)) {
+      // Get context around this link
+      const contextStart = Math.max(0, match.index - 300);
+      const contextEnd = Math.min(markdown.length, match.index + match[0].length + 300);
+      const context = markdown.slice(contextStart, contextEnd);
+      
+      const post = parsePostFromBlock(context, baseUrl);
+      if (post) {
+        post.external_id = postId;
+        post.url = match[2].startsWith('http') ? match[2] : `${baseUrl}/post/${postId}`;
+        seenIds.add(postId);
+        posts.push(post);
       }
-    });
+    }
   }
-
+  
   return posts;
 }
 
@@ -117,31 +216,78 @@ function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[]
 function parseAgentsFromMarkdown(markdown: string): ParsedAgent[] {
   const agents: ParsedAgent[] = [];
   const seenUsernames = new Set<string>();
-
+  
   // Find all username patterns
   const patterns = [
-    /(?:\/u\/|@)(\w{3,30})/gi,
-    /(?:by|posted by|author:?)\s+(\w{3,30})/gi,
+    /u\/(\w{2,30})/gi,
+    /(?:Posted by|by)\s+(\w{2,30})/gi,
+    /@(\w{2,30})/gi,
   ];
-
-  patterns.forEach(pattern => {
+  
+  for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(markdown)) !== null) {
       const username = match[1].toLowerCase();
-      if (!seenUsernames.has(username) && username !== 'unknown_agent') {
+      // Filter out common false positives
+      if (!seenUsernames.has(username) && 
+          username.length >= 2 &&
+          !['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with'].includes(username)) {
         seenUsernames.add(username);
         agents.push({
           external_id: `agent_${username}`,
           username,
           display_name: null,
-          avatar_url: null,
-          bio: null,
         });
       }
     }
-  });
-
+  }
+  
   return agents;
+}
+
+// Parse submolts from markdown
+function parseSubmoltsFromMarkdown(markdown: string): ParsedSubmolt[] {
+  const submolts: ParsedSubmolt[] = [];
+  const seenNames = new Set<string>();
+  
+  // Find all m/submoltname patterns
+  const pattern = /m\/(\w{2,30})/gi;
+  let match;
+  
+  while ((match = pattern.exec(markdown)) !== null) {
+    const name = match[1].toLowerCase();
+    if (!seenNames.has(name)) {
+      seenNames.add(name);
+      submolts.push({
+        external_id: `submolt_${name}`,
+        name,
+      });
+    }
+  }
+  
+  return submolts;
+}
+
+// Calculate text metrics for a post
+function calculateTextMetrics(text: string) {
+  if (!text) {
+    return { word_count: 0, char_count: 0, unique_words: 0, avg_word_length: 0, link_count: 0 };
+  }
+  
+  const words = text.toLowerCase().split(/\s+/).filter(w => w.length > 0);
+  const uniqueWords = new Set(words.filter(w => w.match(/^[a-z]+$/)));
+  const linkCount = (text.match(/https?:\/\/[^\s]+/g) || []).length;
+  const avgWordLength = words.length > 0 
+    ? words.reduce((sum, w) => sum + w.length, 0) / words.length 
+    : 0;
+  
+  return {
+    word_count: words.length,
+    char_count: text.length,
+    unique_words: uniqueWords.size,
+    avg_word_length: Math.round(avgWordLength * 100) / 100,
+    link_count: linkCount,
+  };
 }
 
 Deno.serve(async (req) => {
@@ -189,7 +335,8 @@ Deno.serve(async (req) => {
     }
 
     const { url, scope = 'full', targetId } = await req.json();
-    const targetUrl = url || 'https://www.moltbook.app';
+    // FIXED: Default URL is now moltbook.com
+    const targetUrl = url || 'https://www.moltbook.com';
 
     console.log(`[${user.id}] Starting scrape - URL: ${targetUrl}, scope: ${scope}`);
 
@@ -261,100 +408,199 @@ Deno.serve(async (req) => {
     const links = data.links || [];
     const metadata = data.metadata || {};
 
-    // Parse content
+    // Parse content with improved parsing
     const parsedPosts = parsePostsFromMarkdown(markdown, targetUrl);
     const parsedAgents = parseAgentsFromMarkdown(markdown);
+    const parsedSubmolts = parseSubmoltsFromMarkdown(markdown);
 
-    console.log(`[${user.id}] Parsed ${parsedPosts.length} posts and ${parsedAgents.length} agents`);
+    console.log(`[${user.id}] Parsed ${parsedPosts.length} posts, ${parsedAgents.length} agents, ${parsedSubmolts.length} submolts`);
 
     let postsInserted = 0;
     let agentsInserted = 0;
+    let submoltsInserted = 0;
 
-    // Insert/update agents using service role (bypasses RLS)
-    if (parsedAgents.length > 0) {
-      for (const agent of parsedAgents) {
-        const { error: agentError } = await supabaseAdmin
+    // 1. First, upsert all submolts
+    const submoltIdMap = new Map<string, string>();
+    
+    for (const submolt of parsedSubmolts) {
+      const { data: existingSubmolt } = await supabaseAdmin
+        .from('submolts')
+        .select('id')
+        .eq('name', submolt.name)
+        .single();
+      
+      if (existingSubmolt) {
+        submoltIdMap.set(submolt.name, existingSubmolt.id);
+        // Update last_scraped_at
+        await supabaseAdmin
+          .from('submolts')
+          .update({ last_scraped_at: new Date().toISOString() })
+          .eq('id', existingSubmolt.id);
+      } else {
+        const { data: newSubmolt, error: submoltError } = await supabaseAdmin
+          .from('submolts')
+          .insert({
+            external_id: submolt.external_id,
+            name: submolt.name,
+            first_seen_at: new Date().toISOString(),
+            last_scraped_at: new Date().toISOString(),
+          })
+          .select('id')
+          .single();
+        
+        if (!submoltError && newSubmolt) {
+          submoltIdMap.set(submolt.name, newSubmolt.id);
+          submoltsInserted++;
+        } else if (submoltError) {
+          console.error('Submolt upsert error:', submoltError);
+        }
+      }
+    }
+
+    console.log(`[${user.id}] Submolts upserted: ${submoltsInserted} new, ${submoltIdMap.size} total`);
+
+    // 2. Upsert all agents
+    const agentIdMap = new Map<string, string>();
+    
+    for (const agent of parsedAgents) {
+      const { data: existingAgent } = await supabaseAdmin
+        .from('agents')
+        .select('id')
+        .eq('username', agent.username)
+        .single();
+      
+      if (existingAgent) {
+        agentIdMap.set(agent.username, existingAgent.id);
+        // Update last_seen_at
+        await supabaseAdmin
           .from('agents')
-          .upsert({
+          .update({ last_seen_at: new Date().toISOString() })
+          .eq('id', existingAgent.id);
+      } else {
+        const { data: newAgent, error: agentError } = await supabaseAdmin
+          .from('agents')
+          .insert({
             external_id: agent.external_id,
             username: agent.username,
             display_name: agent.display_name,
-            avatar_url: agent.avatar_url,
-            bio: agent.bio,
+            first_seen_at: new Date().toISOString(),
             last_seen_at: new Date().toISOString(),
-          }, { 
-            onConflict: 'external_id',
-            ignoreDuplicates: false 
-          });
-
-        if (!agentError) {
+          })
+          .select('id')
+          .single();
+        
+        if (!agentError && newAgent) {
+          agentIdMap.set(agent.username, newAgent.id);
           agentsInserted++;
-        } else {
+        } else if (agentError) {
           console.error('Agent upsert error:', agentError);
         }
       }
     }
 
-    // Get agent ID map
-    const agentMap = new Map<string, string>();
-    if (parsedAgents.length > 0) {
-      const { data: agents } = await supabaseAdmin
-        .from('agents')
-        .select('id, username')
-        .in('username', parsedAgents.map(a => a.username));
-      
-      agents?.forEach(a => agentMap.set(a.username, a.id));
-    }
+    console.log(`[${user.id}] Agents upserted: ${agentsInserted} new, ${agentIdMap.size} total`);
 
-    // Insert/update posts using service role
-    if (parsedPosts.length > 0) {
-      for (const post of parsedPosts) {
-        const agentId = agentMap.get(post.agent_username) || null;
+    // 3. Upsert all posts with proper FK linkage
+    // First, ensure all agent usernames from posts are in our map
+    for (const post of parsedPosts) {
+      if (post.agent_username && !agentIdMap.has(post.agent_username)) {
+        // Try to find this agent in the database
+        const { data: existingAgent } = await supabaseAdmin
+          .from('agents')
+          .select('id')
+          .eq('username', post.agent_username)
+          .single();
         
-        // Calculate text metrics
-        const content = post.content || '';
-        const wordCount = content.split(/\s+/).filter(w => w.length > 0).length;
-        const charCount = content.length;
-
-        const { error: postError } = await supabaseAdmin
-          .from('posts')
-          .upsert({
-            external_id: post.external_id,
-            title: post.title,
-            content: post.content,
-            url: post.url,
-            upvotes: post.upvotes,
-            downvotes: post.downvotes,
-            comment_count: post.comment_count,
-            posted_at: post.posted_at,
-            agent_id: agentId,
-            word_count: wordCount,
-            char_count: charCount,
-            scraped_at: new Date().toISOString(),
-          }, { 
-            onConflict: 'external_id',
-            ignoreDuplicates: false 
-          });
-
-        if (!postError) {
-          postsInserted++;
+        if (existingAgent) {
+          agentIdMap.set(post.agent_username, existingAgent.id);
         } else {
-          console.error('Post upsert error:', postError);
+          // Create the agent
+          const { data: newAgent, error: agentError } = await supabaseAdmin
+            .from('agents')
+            .insert({
+              external_id: `agent_${post.agent_username}`,
+              username: post.agent_username,
+              first_seen_at: new Date().toISOString(),
+              last_seen_at: new Date().toISOString(),
+            })
+            .select('id')
+            .single();
+          
+          if (!agentError && newAgent) {
+            agentIdMap.set(post.agent_username, newAgent.id);
+            agentsInserted++;
+          }
         }
       }
+    }
 
-      // Update agent post counts
-      for (const [username, agentId] of agentMap) {
-        const postCount = parsedPosts.filter(p => p.agent_username === username).length;
-        if (postCount > 0) {
-          await supabaseAdmin
-            .from('agents')
-            .update({ 
-              post_count: postCount,
-              last_seen_at: new Date().toISOString()
-            })
-            .eq('id', agentId);
-        }
+    console.log(`[${user.id}] Agent map size after post processing: ${agentIdMap.size}`);
+
+    const agentPostCounts = new Map<string, number>();
+    
+    for (const post of parsedPosts) {
+      const agentId = post.agent_username ? agentIdMap.get(post.agent_username) || null : null;
+      const submoltId = post.submolt_name ? submoltIdMap.get(post.submolt_name) || null : null;
+      
+      // Track post counts per agent
+      if (post.agent_username && agentId) {
+        agentPostCounts.set(post.agent_username, (agentPostCounts.get(post.agent_username) || 0) + 1);
+      }
+      
+      // Calculate text metrics
+      const textContent = `${post.title || ''} ${post.content || ''}`;
+      const metrics = calculateTextMetrics(textContent);
+
+      const { error: postError } = await supabaseAdmin
+        .from('posts')
+        .upsert({
+          external_id: post.external_id,
+          title: post.title,
+          content: post.content,
+          url: post.url,
+          upvotes: post.upvotes,
+          downvotes: post.downvotes,
+          comment_count: post.comment_count,
+          posted_at: post.posted_at,
+          agent_id: agentId,
+          submolt_id: submoltId,
+          word_count: metrics.word_count,
+          char_count: metrics.char_count,
+          unique_words: metrics.unique_words,
+          avg_word_length: metrics.avg_word_length,
+          link_count: metrics.link_count,
+          scraped_at: new Date().toISOString(),
+        }, { 
+          onConflict: 'external_id',
+          ignoreDuplicates: false 
+        });
+
+      if (!postError) {
+        postsInserted++;
+      } else {
+        console.error('Post upsert error:', postError);
+      }
+    }
+
+    console.log(`[${user.id}] Posts upserted: ${postsInserted}`);
+
+    // 4. Update agent post counts
+    for (const [username, postCount] of agentPostCounts) {
+      const agentId = agentIdMap.get(username);
+      if (agentId) {
+        // Get actual total post count from database
+        const { count } = await supabaseAdmin
+          .from('posts')
+          .select('id', { count: 'exact', head: true })
+          .eq('agent_id', agentId);
+        
+        await supabaseAdmin
+          .from('agents')
+          .update({ 
+            post_count: count || postCount,
+            last_seen_at: new Date().toISOString()
+          })
+          .eq('id', agentId);
       }
     }
 
@@ -369,7 +615,7 @@ Deno.serve(async (req) => {
       })
       .eq('id', job.id);
 
-    console.log(`[${user.id}] Job completed: ${job.id} - ${postsInserted} posts, ${agentsInserted} agents`);
+    console.log(`[${user.id}] Job completed: ${job.id} - ${postsInserted} posts, ${agentsInserted} agents, ${submoltsInserted} submolts`);
 
     return new Response(
       JSON.stringify({
@@ -379,8 +625,11 @@ Deno.serve(async (req) => {
           url: targetUrl,
           postsInserted,
           agentsInserted,
+          submoltsInserted,
           linksCount: links.length,
           rawPostsFound: parsedPosts.length,
+          rawAgentsFound: parsedAgents.length,
+          rawSubmoltsFound: parsedSubmolts.length,
           metadata
         }
       }),
