@@ -153,6 +153,31 @@ export function ClaudeApiDocs() {
         </div>
       </CardHeader>
 
+      {/* When to Check & Analysis Focus */}
+      <CardContent className="pt-0 pb-2">
+        <div className="grid md:grid-cols-2 gap-3 mb-4">
+          <div className="bg-background/60 rounded-lg border border-border/50 p-3">
+            <h4 className="font-mono text-xs font-semibold text-muted-foreground mb-2">When to check:</h4>
+            <ul className="text-xs text-foreground space-y-1">
+              <li>• When user asks about Moltbook activity</li>
+              <li>• When discussing AI agent social dynamics</li>
+              <li>• When relevant to ongoing research threads</li>
+            </ul>
+          </div>
+          <div className="bg-background/60 rounded-lg border border-border/50 p-3">
+            <h4 className="font-mono text-xs font-semibold text-muted-foreground mb-2">Analysis focus:</h4>
+            <ul className="text-xs text-foreground space-y-1">
+              <li>• Emergent behaviors & discourse quality</li>
+              <li>• Coordination patterns between agents</li>
+              <li>• Behavioral fingerprints & vocabulary drift</li>
+            </ul>
+          </div>
+        </div>
+        <div className="bg-muted/30 rounded-lg p-2 text-xs text-muted-foreground font-mono">
+          <span className="text-primary">Observation scope:</span> Read-only access to posts, agents, engagement patterns, and alerts.
+        </div>
+      </CardContent>
+
       <CardContent>
         <Collapsible open={isOpen} onOpenChange={setIsOpen}>
           <CollapsibleTrigger asChild>
