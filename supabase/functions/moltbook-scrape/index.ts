@@ -22,221 +22,185 @@ interface ParsedAgent {
   external_id: string;
   username: string;
   display_name: string | null;
+  twitter_handle: string | null;
 }
 
 interface ParsedSubmolt {
   external_id: string;
   name: string;
+  member_count: number | null;
+}
+
+interface ParsedComment {
+  external_id: string;
+  content: string;
+  agent_username: string | null;
+  post_external_id: string | null;
+  upvotes: number;
 }
 
 // Extract a clean title from a markdown block
 function extractTitle(block: string): string | null {
-  // Try bold **Title** pattern first
-  const boldMatch = block.match(/\*\*([^*]+)\*\*/);
-  if (boldMatch && boldMatch[1].length > 3 && boldMatch[1].length < 300) {
-    return boldMatch[1].trim();
+  // Try bold **Title** pattern first - but be careful about nested content
+  const boldMatch = block.match(/\*\*([^*\n]{5,200})\*\*/);
+  if (boldMatch && !boldMatch[1].includes('Option') && !boldMatch[1].includes('Evidence')) {
+    const title = boldMatch[1].trim();
+    // Skip if it looks like internal content (lists, headers)
+    if (!title.startsWith('-') && !title.match(/^\d+\./)) {
+      return title;
+    }
   }
   
-  // Try heading ## Title pattern
-  const headingMatch = block.match(/^#+\s+(.+)$/m);
-  if (headingMatch && headingMatch[1].length > 3 && headingMatch[1].length < 300) {
+  // Try # Header pattern
+  const headingMatch = block.match(/^#+\s+([^\n]{5,200})$/m);
+  if (headingMatch) {
     return headingMatch[1].trim();
-  }
-  
-  // Try link [Title](url) pattern
-  const linkMatch = block.match(/\[([^\]]+)\]\([^)]+\/post\/[^)]+\)/);
-  if (linkMatch && linkMatch[1].length > 3 && linkMatch[1].length < 300) {
-    // Clean up the title - remove vote arrows and extra content
-    let title = linkMatch[1].trim();
-    // Remove vote patterns like "▲3▼" at the start
-    title = title.replace(/^[▲▼\d\s]+/, '');
-    // Remove submolt patterns like "m/general"
-    title = title.replace(/^m\/\w+[\s•]+/, '');
-    return title.length > 3 ? title : null;
   }
   
   return null;
 }
 
-// Parse individual post blocks from Moltbook markdown
-function parsePostBlocks(markdown: string): string[] {
-  // Split on horizontal rules or multiple newlines that separate posts
-  const blocks = markdown.split(/(?:\n---\n|\n{3,}|(?=▲\d+▼))/);
-  
-  // Filter to blocks that look like posts (have vote patterns or post links)
-  return blocks.filter(block => {
-    return (
-      block.includes('/post/') ||
-      /▲\d+▼/.test(block) ||
-      (/m\/\w+/.test(block) && /u\/\w+/.test(block))
-    );
-  });
-}
-
-// Parse a single post block into structured data
-function parsePostFromBlock(block: string, baseUrl: string): ParsedPost | null {
-  // Extract post URL and ID
-  const postUrlMatch = block.match(/(?:https?:\/\/[^/]+)?\/post\/([a-f0-9-]+)/i);
-  if (!postUrlMatch) {
-    // Try to generate a unique ID from content
-    const contentHash = block.slice(0, 100).replace(/\W/g, '').toLowerCase();
-    if (contentHash.length < 5) return null;
-  }
-  
-  const postId = postUrlMatch ? postUrlMatch[1] : `scraped_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const postUrl = postUrlMatch 
-    ? (postUrlMatch[0].startsWith('http') ? postUrlMatch[0] : `${baseUrl}/post/${postId}`)
-    : `${baseUrl}/post/${postId}`;
-  
-  // Extract title
-  const title = extractTitle(block);
-  if (!title) return null;
-  
-  // Extract upvotes from ▲X▼ pattern
-  const voteMatch = block.match(/▲(\d+)▼/);
-  const upvotes = voteMatch ? parseInt(voteMatch[1], 10) : 0;
-  
-  // Extract downvotes (if separate)
-  const downvoteMatch = block.match(/▼(\d+)/);
-  const downvotes = downvoteMatch && !voteMatch ? parseInt(downvoteMatch[1], 10) : 0;
-  
-  // Extract submolt from m/submoltname pattern
-  const submoltMatch = block.match(/m\/(\w+)/);
-  const submolt = submoltMatch ? submoltMatch[1].toLowerCase() : null;
-  
-  // Extract agent username from u/username or "Posted by username" pattern
-  // Be careful not to capture just "u" - need to capture the full username after u/
-  const agentMatch = block.match(/u\/([a-zA-Z0-9_]{2,30})|Posted by\s+([a-zA-Z0-9_]{2,30})|by\s+([a-zA-Z0-9_]{2,30})/i);
-  let username: string | null = null;
-  if (agentMatch) {
-    // Take the first non-undefined capture group
-    username = (agentMatch[1] || agentMatch[2] || agentMatch[3] || '').toLowerCase();
-    // Filter out common false positives
-    if (['u', 'the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago'].includes(username)) {
-      username = null;
-    }
-  }
-  
-  // Extract comment count from 💬X or X comments pattern
-  const commentMatch = block.match(/💬\s*(\d+)|(\d+)\s*(?:comments?|replies)/i);
-  const commentCount = commentMatch ? parseInt(commentMatch[1] || commentMatch[2], 10) : 0;
-  
-  // Extract content - everything after the title and metadata
-  let content = block;
-  // Remove metadata patterns
-  content = content.replace(/▲\d+▼/g, '');
-  content = content.replace(/m\/\w+/g, '');
-  content = content.replace(/u\/\w+/g, '');
-  content = content.replace(/\d+\s*(?:comments?|replies)/gi, '');
-  content = content.replace(/\*\*[^*]+\*\*/g, '');
-  content = content.replace(/\[[^\]]+\]\([^)]+\)/g, '');
-  content = content.trim();
-  
-  // Extract timestamp if present
-  let postedAt: string | null = null;
-  const timePatterns = [
-    /(\d+)\s*(?:hours?|hrs?)\s*ago/i,
-    /(\d+)\s*(?:minutes?|mins?)\s*ago/i,
-    /(\d+)\s*(?:days?)\s*ago/i,
-  ];
-  
-  for (const pattern of timePatterns) {
-    const match = block.match(pattern);
-    if (match) {
-      const amount = parseInt(match[1], 10);
-      const now = new Date();
-      if (pattern.source.includes('hour')) {
-        now.setHours(now.getHours() - amount);
-      } else if (pattern.source.includes('minute')) {
-        now.setMinutes(now.getMinutes() - amount);
-      } else if (pattern.source.includes('day')) {
-        now.setDate(now.getDate() - amount);
-      }
-      postedAt = now.toISOString();
-      break;
-    }
-  }
-  
-  return {
-    external_id: postId,
-    title,
-    content: content.length > 10 ? content.slice(0, 5000) : null,
-    url: postUrl,
-    upvotes,
-    downvotes,
-    comment_count: commentCount,
-    posted_at: postedAt,
-    agent_username: username,
-    submolt_name: submolt,
-  };
-}
-
-// Parse all posts from markdown
+// Parse post entries from markdown with improved patterns
 function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[] {
   const posts: ParsedPost[] = [];
   const seenIds = new Set<string>();
   
-  // First try block-based parsing
-  const blocks = parsePostBlocks(markdown);
+  // Pattern 1: Full post blocks with vote, submolt, user, title, comments
+  // Format: [▲X▼\n\nm/submolt•Posted by u/user•time\n\n**Title**...\n💬X comments](url)
+  const postBlockRegex = /\[▲(\d+)▼[\s\\n]*m\/(\w+)[^u]*u\/([a-zA-Z0-9_-]+)[^*]*\*\*([^*]+)\*\*[^💬]*💬\s*(\d+)/gi;
   
-  for (const block of blocks) {
-    const post = parsePostFromBlock(block, baseUrl);
-    if (post && !seenIds.has(post.external_id)) {
-      seenIds.add(post.external_id);
-      posts.push(post);
+  let match;
+  while ((match = postBlockRegex.exec(markdown)) !== null) {
+    const upvotes = parseInt(match[1], 10);
+    const submolt = match[2].toLowerCase();
+    const username = match[3].toLowerCase();
+    const title = match[4].trim();
+    const commentCount = parseInt(match[5], 10);
+    
+    // Find the URL after this match
+    const urlMatch = markdown.slice(match.index, match.index + match[0].length + 200).match(/\/post\/([a-f0-9-]+)/i);
+    if (urlMatch && !seenIds.has(urlMatch[1])) {
+      seenIds.add(urlMatch[1]);
+      
+      // Get content - text between title and comments
+      const contentStart = match.index + match[0].indexOf('**' + title + '**') + title.length + 4;
+      const contentEnd = match.index + match[0].indexOf('💬');
+      let content = markdown.slice(contentStart, contentEnd).trim();
+      // Clean up content
+      content = content.replace(/\\n/g, '\n').replace(/^\s*\n+/, '').replace(/\n+\s*$/, '');
+      
+      posts.push({
+        external_id: urlMatch[1],
+        title: title,
+        content: content.length > 10 ? content.slice(0, 5000) : null,
+        url: `${baseUrl}/post/${urlMatch[1]}`,
+        upvotes,
+        downvotes: 0,
+        comment_count: commentCount,
+        posted_at: extractTimestamp(match[0]),
+        agent_username: username,
+        submolt_name: submolt,
+      });
     }
   }
   
-  // Also scan for post links we might have missed
-  const linkPattern = /\[([^\]]+)\]\(((?:https?:\/\/[^/]+)?\/post\/([a-f0-9-]+))\)/gi;
-  let match;
-  
-  while ((match = linkPattern.exec(markdown)) !== null) {
-    const postId = match[3];
-    if (!seenIds.has(postId)) {
-      // Get context around this link
-      const contextStart = Math.max(0, match.index - 300);
-      const contextEnd = Math.min(markdown.length, match.index + match[0].length + 300);
-      const context = markdown.slice(contextStart, contextEnd);
-      
-      const post = parsePostFromBlock(context, baseUrl);
-      if (post) {
-        post.external_id = postId;
-        post.url = match[2].startsWith('http') ? match[2] : `${baseUrl}/post/${postId}`;
-        seenIds.add(postId);
-        posts.push(post);
+  // Pattern 2: Simpler - find all post URLs and extract nearby metadata
+  const urlPattern = /\/post\/([a-f0-9-]{36})/gi;
+  while ((match = urlPattern.exec(markdown)) !== null) {
+    const postId = match[1];
+    if (seenIds.has(postId)) continue;
+    
+    // Get context around this URL
+    const contextStart = Math.max(0, match.index - 600);
+    const contextEnd = Math.min(markdown.length, match.index + 100);
+    const context = markdown.slice(contextStart, contextEnd);
+    
+    // Extract title
+    const title = extractTitle(context);
+    if (!title || title.length < 5) continue;
+    
+    // Extract votes
+    const voteMatch = context.match(/▲(\d+)▼/);
+    const upvotes = voteMatch ? parseInt(voteMatch[1], 10) : 0;
+    
+    // Extract submolt
+    const submoltMatch = context.match(/m\/(\w{2,30})/);
+    const submolt = submoltMatch ? submoltMatch[1].toLowerCase() : null;
+    
+    // Extract username - need at least 2 chars, not common words
+    const userMatch = context.match(/u\/([a-zA-Z0-9_-]{2,30})/);
+    let username: string | null = null;
+    if (userMatch) {
+      const candidate = userMatch[1].toLowerCase();
+      if (!['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago'].includes(candidate)) {
+        username = candidate;
       }
     }
+    
+    // Extract comment count
+    const commentMatch = context.match(/💬\s*(\d+)|(\d+)\s*comments?/i);
+    const commentCount = commentMatch ? parseInt(commentMatch[1] || commentMatch[2], 10) : 0;
+    
+    seenIds.add(postId);
+    posts.push({
+      external_id: postId,
+      title,
+      content: null,
+      url: `${baseUrl}/post/${postId}`,
+      upvotes,
+      downvotes: 0,
+      comment_count: commentCount,
+      posted_at: extractTimestamp(context),
+      agent_username: username,
+      submolt_name: submolt,
+    });
   }
   
   return posts;
 }
 
-// Parse agents from markdown
+// Parse agents from the /u agents listing page
 function parseAgentsFromMarkdown(markdown: string): ParsedAgent[] {
   const agents: ParsedAgent[] = [];
   const seenUsernames = new Set<string>();
   
-  // Find all username patterns
-  const patterns = [
-    /u\/(\w{2,30})/gi,
-    /(?:Posted by|by)\s+(\w{2,30})/gi,
-    /@(\w{2,30})/gi,
+  // Pattern for agent cards: Username with Twitter handle
+  // Format: [Username\n\ntime ago\n\n@twitterhandle](url)
+  const agentCardRegex = /\[([A-Z][a-zA-Z0-9_-]{1,29})\\n[\\n\s]*✓?[\\n\s]*(?:[^@\n]{0,50})\\n[\\n\s]*(?:\d+[mhd]\s*ago)?[\\n\s]*(?:@(\w+))?\]/gi;
+  
+  let match;
+  while ((match = agentCardRegex.exec(markdown)) !== null) {
+    const username = match[1].toLowerCase();
+    const twitter = match[2] || null;
+    
+    if (!seenUsernames.has(username) && username.length >= 2) {
+      seenUsernames.add(username);
+      agents.push({
+        external_id: `agent_${username}`,
+        username,
+        display_name: match[1], // Keep original case for display
+        twitter_handle: twitter,
+      });
+    }
+  }
+  
+  // Also find u/username patterns throughout the markdown
+  const userPatterns = [
+    /u\/([a-zA-Z0-9_-]{2,30})/gi,
+    /Posted by\s+([a-zA-Z0-9_-]{2,30})/gi,
   ];
   
-  for (const pattern of patterns) {
-    let match;
+  for (const pattern of userPatterns) {
     while ((match = pattern.exec(markdown)) !== null) {
       const username = match[1].toLowerCase();
-      // Filter out common false positives
-      if (!seenUsernames.has(username) && 
-          username.length >= 2 &&
-          !['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with'].includes(username)) {
+      const blocked = ['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago', 'post', 'comment'];
+      if (!seenUsernames.has(username) && username.length >= 2 && !blocked.includes(username)) {
         seenUsernames.add(username);
         agents.push({
           external_id: `agent_${username}`,
           username,
           display_name: null,
+          twitter_handle: null,
         });
       }
     }
@@ -245,22 +209,40 @@ function parseAgentsFromMarkdown(markdown: string): ParsedAgent[] {
   return agents;
 }
 
-// Parse submolts from markdown
+// Parse submolts from markdown - extract member counts too
 function parseSubmoltsFromMarkdown(markdown: string): ParsedSubmolt[] {
   const submolts: ParsedSubmolt[] = [];
   const seenNames = new Set<string>();
   
-  // Find all m/submoltname patterns
-  const pattern = /m\/(\w{2,30})/gi;
-  let match;
+  // Pattern for submolt cards: m/name with member count
+  // Format: [🦞\n\nm/name\n\nX members](url)
+  const submoltCardRegex = /m\/(\w{2,30})[\s\\n]*(\d+)\s*members?/gi;
   
-  while ((match = pattern.exec(markdown)) !== null) {
+  let match;
+  while ((match = submoltCardRegex.exec(markdown)) !== null) {
+    const name = match[1].toLowerCase();
+    const memberCount = parseInt(match[2], 10);
+    
+    if (!seenNames.has(name)) {
+      seenNames.add(name);
+      submolts.push({
+        external_id: `submolt_${name}`,
+        name,
+        member_count: memberCount,
+      });
+    }
+  }
+  
+  // Also find m/submoltname patterns without member counts
+  const simplePattern = /m\/(\w{2,30})/gi;
+  while ((match = simplePattern.exec(markdown)) !== null) {
     const name = match[1].toLowerCase();
     if (!seenNames.has(name)) {
       seenNames.add(name);
       submolts.push({
         external_id: `submolt_${name}`,
         name,
+        member_count: null,
       });
     }
   }
@@ -268,7 +250,59 @@ function parseSubmoltsFromMarkdown(markdown: string): ParsedSubmolt[] {
   return submolts;
 }
 
-// Calculate text metrics for a post
+// Parse comments from post detail pages
+function parseCommentsFromMarkdown(markdown: string, postExternalId: string | null): ParsedComment[] {
+  const comments: ParsedComment[] = [];
+  
+  // Pattern for comments: ▲X▼ followed by u/username and content
+  const commentPattern = /▲(\d+)▼[\s\\n]*u\/([a-zA-Z0-9_-]{2,30})[^▲]*?(?=▲\d+▼|$)/gi;
+  
+  let match;
+  while ((match = commentPattern.exec(markdown)) !== null) {
+    const upvotes = parseInt(match[1], 10);
+    const username = match[2].toLowerCase();
+    const content = match[0].replace(/▲\d+▼/, '').replace(/u\/\w+/, '').trim().slice(0, 2000);
+    
+    if (content.length > 5) {
+      comments.push({
+        external_id: `comment_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        content,
+        agent_username: username,
+        post_external_id: postExternalId,
+        upvotes,
+      });
+    }
+  }
+  
+  return comments;
+}
+
+// Extract timestamp from relative time strings
+function extractTimestamp(text: string): string | null {
+  const patterns = [
+    { regex: /(\d+)\s*m\s*ago/i, unit: 'minutes' },
+    { regex: /(\d+)\s*h\s*ago/i, unit: 'hours' },
+    { regex: /(\d+)\s*d\s*ago/i, unit: 'days' },
+    { regex: /(\d+)\s*w\s*ago/i, unit: 'weeks' },
+  ];
+  
+  for (const { regex, unit } of patterns) {
+    const match = text.match(regex);
+    if (match) {
+      const amount = parseInt(match[1], 10);
+      const now = new Date();
+      if (unit === 'minutes') now.setMinutes(now.getMinutes() - amount);
+      else if (unit === 'hours') now.setHours(now.getHours() - amount);
+      else if (unit === 'days') now.setDate(now.getDate() - amount);
+      else if (unit === 'weeks') now.setDate(now.getDate() - amount * 7);
+      return now.toISOString();
+    }
+  }
+  
+  return null;
+}
+
+// Calculate text metrics for content analysis
 function calculateTextMetrics(text: string) {
   if (!text) {
     return { word_count: 0, char_count: 0, unique_words: 0, avg_word_length: 0, link_count: 0 };
@@ -288,6 +322,79 @@ function calculateTextMetrics(text: string) {
     avg_word_length: Math.round(avgWordLength * 100) / 100,
     link_count: linkCount,
   };
+}
+
+// Fetch a single page using Firecrawl scrape API
+async function scrapePage(url: string, apiKey: string): Promise<{ markdown: string; links: string[] }> {
+  const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      url,
+      formats: ['markdown', 'links'],
+      onlyMainContent: true,
+    }),
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Firecrawl error: ${error.error || response.statusText}`);
+  }
+  
+  const result = await response.json();
+  const data = result.data || result;
+  return {
+    markdown: data.markdown || '',
+    links: data.links || [],
+  };
+}
+
+// Start an async crawl job
+async function startCrawl(url: string, apiKey: string, limit: number = 50): Promise<string> {
+  const response = await fetch('https://api.firecrawl.dev/v1/crawl', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      url,
+      limit,
+      maxDepth: 2,
+      scrapeOptions: {
+        formats: ['markdown'],
+        onlyMainContent: true,
+      },
+    }),
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Crawl start error: ${error.error || response.statusText}`);
+  }
+  
+  const result = await response.json();
+  return result.id;
+}
+
+// Poll crawl status
+async function pollCrawl(crawlId: string, apiKey: string): Promise<{ status: string; data?: any[] }> {
+  const response = await fetch(`https://api.firecrawl.dev/v1/crawl/${crawlId}`, {
+    method: 'GET',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+    },
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(`Crawl poll error: ${error.error || response.statusText}`);
+  }
+  
+  return await response.json();
 }
 
 Deno.serve(async (req) => {
@@ -315,12 +422,9 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    
-    // Use service role for data insertion (bypasses RLS)
-    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
-    
-    // Use anon key with auth header for user context
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+    
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
     const supabaseAuth = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } }
     });
@@ -334,11 +438,10 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { url, scope = 'full', targetId } = await req.json();
-    // FIXED: Default URL is now moltbook.com
-    const targetUrl = url || 'https://www.moltbook.com';
+    const { mode = 'full', pageLimit = 20 } = await req.json().catch(() => ({}));
+    const baseUrl = 'https://www.moltbook.com';
 
-    console.log(`[${user.id}] Starting scrape - URL: ${targetUrl}, scope: ${scope}`);
+    console.log(`[${user.id}] Starting ${mode} scrape with limit ${pageLimit}`);
 
     // Create scrape job record
     const { data: job, error: jobError } = await supabaseAuth
@@ -346,8 +449,7 @@ Deno.serve(async (req) => {
       .insert({
         user_id: user.id,
         status: 'running',
-        scope,
-        target_id: targetId,
+        scope: mode,
         started_at: new Date().toISOString()
       })
       .select()
@@ -363,121 +465,106 @@ Deno.serve(async (req) => {
 
     console.log(`[${user.id}] Created job: ${job.id}`);
 
-    // Call Firecrawl scrape API
-    const firecrawlResponse = await fetch('https://api.firecrawl.dev/v1/scrape', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url: targetUrl,
-        formats: ['markdown', 'links'],
-        onlyMainContent: true,
-      }),
-    });
+    // Strategy: Scrape multiple key pages to get broader data
+    const pagesToScrape = [
+      baseUrl,                    // Main feed
+      `${baseUrl}/?sort=new`,     // New posts
+      `${baseUrl}/?sort=top`,     // Top posts
+      `${baseUrl}/m`,             // Submolts list
+    ];
 
-    const scrapeResult = await firecrawlResponse.json();
+    let allMarkdown = '';
+    let allLinks: string[] = [];
+    let pagesScraped = 0;
 
-    if (!firecrawlResponse.ok) {
-      console.error('Firecrawl API error:', scrapeResult);
-      
-      await supabaseAuth
-        .from('scrape_jobs')
-        .update({
-          status: 'failed',
-          error_message: scrapeResult.error || 'Firecrawl request failed',
-          completed_at: new Date().toISOString()
-        })
-        .eq('id', job.id);
-
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: scrapeResult.error || 'Firecrawl request failed',
-          jobId: job.id 
-        }),
-        { status: firecrawlResponse.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    for (const pageUrl of pagesToScrape.slice(0, Math.min(pageLimit, pagesToScrape.length))) {
+      try {
+        console.log(`[${user.id}] Scraping: ${pageUrl}`);
+        const { markdown, links } = await scrapePage(pageUrl, apiKey);
+        allMarkdown += '\n\n---PAGE BOUNDARY---\n\n' + markdown;
+        allLinks = [...allLinks, ...links];
+        pagesScraped++;
+        // Small delay to avoid rate limits
+        await new Promise(r => setTimeout(r, 500));
+      } catch (error) {
+        console.error(`[${user.id}] Error scraping ${pageUrl}:`, error);
+      }
     }
 
-    console.log(`[${user.id}] Firecrawl scrape successful`);
+    console.log(`[${user.id}] Scraped ${pagesScraped} pages, ${allMarkdown.length} chars total`);
 
-    const data = scrapeResult.data || scrapeResult;
-    const markdown = data.markdown || '';
-    const links = data.links || [];
-    const metadata = data.metadata || {};
+    // Parse all content
+    const parsedPosts = parsePostsFromMarkdown(allMarkdown, baseUrl);
+    const parsedAgents = parseAgentsFromMarkdown(allMarkdown);
+    const parsedSubmolts = parseSubmoltsFromMarkdown(allMarkdown);
 
-    // Parse content with improved parsing
-    const parsedPosts = parsePostsFromMarkdown(markdown, targetUrl);
-    const parsedAgents = parseAgentsFromMarkdown(markdown);
-    const parsedSubmolts = parseSubmoltsFromMarkdown(markdown);
+    console.log(`[${user.id}] Parsed: ${parsedPosts.length} posts, ${parsedAgents.length} agents, ${parsedSubmolts.length} submolts`);
 
-    console.log(`[${user.id}] Parsed ${parsedPosts.length} posts, ${parsedAgents.length} agents, ${parsedSubmolts.length} submolts`);
-
+    // ============= DATABASE UPSERTS =============
+    
     let postsInserted = 0;
     let agentsInserted = 0;
     let submoltsInserted = 0;
 
-    // 1. First, upsert all submolts
+    // 1. Upsert submolts
     const submoltIdMap = new Map<string, string>();
     
     for (const submolt of parsedSubmolts) {
-      const { data: existingSubmolt } = await supabaseAdmin
+      const { data: existing } = await supabaseAdmin
         .from('submolts')
         .select('id')
         .eq('name', submolt.name)
         .single();
       
-      if (existingSubmolt) {
-        submoltIdMap.set(submolt.name, existingSubmolt.id);
-        // Update last_scraped_at
+      if (existing) {
+        submoltIdMap.set(submolt.name, existing.id);
         await supabaseAdmin
           .from('submolts')
-          .update({ last_scraped_at: new Date().toISOString() })
-          .eq('id', existingSubmolt.id);
+          .update({ 
+            last_scraped_at: new Date().toISOString(),
+            member_count: submolt.member_count || undefined,
+          })
+          .eq('id', existing.id);
       } else {
-        const { data: newSubmolt, error: submoltError } = await supabaseAdmin
+        const { data: newSubmolt, error } = await supabaseAdmin
           .from('submolts')
           .insert({
             external_id: submolt.external_id,
             name: submolt.name,
+            member_count: submolt.member_count,
             first_seen_at: new Date().toISOString(),
             last_scraped_at: new Date().toISOString(),
           })
           .select('id')
           .single();
         
-        if (!submoltError && newSubmolt) {
+        if (!error && newSubmolt) {
           submoltIdMap.set(submolt.name, newSubmolt.id);
           submoltsInserted++;
-        } else if (submoltError) {
-          console.error('Submolt upsert error:', submoltError);
         }
       }
     }
 
-    console.log(`[${user.id}] Submolts upserted: ${submoltsInserted} new, ${submoltIdMap.size} total`);
+    console.log(`[${user.id}] Submolts: ${submoltsInserted} new, ${submoltIdMap.size} total`);
 
-    // 2. Upsert all agents
+    // 2. Upsert agents
     const agentIdMap = new Map<string, string>();
     
     for (const agent of parsedAgents) {
-      const { data: existingAgent } = await supabaseAdmin
+      const { data: existing } = await supabaseAdmin
         .from('agents')
         .select('id')
         .eq('username', agent.username)
         .single();
       
-      if (existingAgent) {
-        agentIdMap.set(agent.username, existingAgent.id);
-        // Update last_seen_at
+      if (existing) {
+        agentIdMap.set(agent.username, existing.id);
         await supabaseAdmin
           .from('agents')
           .update({ last_seen_at: new Date().toISOString() })
-          .eq('id', existingAgent.id);
+          .eq('id', existing.id);
       } else {
-        const { data: newAgent, error: agentError } = await supabaseAdmin
+        const { data: newAgent, error } = await supabaseAdmin
           .from('agents')
           .insert({
             external_id: agent.external_id,
@@ -489,33 +576,29 @@ Deno.serve(async (req) => {
           .select('id')
           .single();
         
-        if (!agentError && newAgent) {
+        if (!error && newAgent) {
           agentIdMap.set(agent.username, newAgent.id);
           agentsInserted++;
-        } else if (agentError) {
-          console.error('Agent upsert error:', agentError);
         }
       }
     }
 
-    console.log(`[${user.id}] Agents upserted: ${agentsInserted} new, ${agentIdMap.size} total`);
+    console.log(`[${user.id}] Agents: ${agentsInserted} new, ${agentIdMap.size} total`);
 
-    // 3. Upsert all posts with proper FK linkage
-    // First, ensure all agent usernames from posts are in our map
+    // 3. Upsert posts - ensure agents exist first
     for (const post of parsedPosts) {
+      // Create agent if referenced but not yet in map
       if (post.agent_username && !agentIdMap.has(post.agent_username)) {
-        // Try to find this agent in the database
-        const { data: existingAgent } = await supabaseAdmin
+        const { data: existing } = await supabaseAdmin
           .from('agents')
           .select('id')
           .eq('username', post.agent_username)
           .single();
         
-        if (existingAgent) {
-          agentIdMap.set(post.agent_username, existingAgent.id);
+        if (existing) {
+          agentIdMap.set(post.agent_username, existing.id);
         } else {
-          // Create the agent
-          const { data: newAgent, error: agentError } = await supabaseAdmin
+          const { data: newAgent } = await supabaseAdmin
             .from('agents')
             .insert({
               external_id: `agent_${post.agent_username}`,
@@ -526,28 +609,16 @@ Deno.serve(async (req) => {
             .select('id')
             .single();
           
-          if (!agentError && newAgent) {
+          if (newAgent) {
             agentIdMap.set(post.agent_username, newAgent.id);
             agentsInserted++;
           }
         }
       }
-    }
 
-    console.log(`[${user.id}] Agent map size after post processing: ${agentIdMap.size}`);
-
-    const agentPostCounts = new Map<string, number>();
-    
-    for (const post of parsedPosts) {
       const agentId = post.agent_username ? agentIdMap.get(post.agent_username) || null : null;
       const submoltId = post.submolt_name ? submoltIdMap.get(post.submolt_name) || null : null;
       
-      // Track post counts per agent
-      if (post.agent_username && agentId) {
-        agentPostCounts.set(post.agent_username, (agentPostCounts.get(post.agent_username) || 0) + 1);
-      }
-      
-      // Calculate text metrics
       const textContent = `${post.title || ''} ${post.content || ''}`;
       const metrics = calculateTextMetrics(textContent);
 
@@ -585,26 +656,21 @@ Deno.serve(async (req) => {
     console.log(`[${user.id}] Posts upserted: ${postsInserted}`);
 
     // 4. Update agent post counts
-    for (const [username, postCount] of agentPostCounts) {
-      const agentId = agentIdMap.get(username);
-      if (agentId) {
-        // Get actual total post count from database
-        const { count } = await supabaseAdmin
-          .from('posts')
-          .select('id', { count: 'exact', head: true })
-          .eq('agent_id', agentId);
-        
+    for (const [username, agentId] of agentIdMap) {
+      const { count } = await supabaseAdmin
+        .from('posts')
+        .select('id', { count: 'exact', head: true })
+        .eq('agent_id', agentId);
+      
+      if (count && count > 0) {
         await supabaseAdmin
           .from('agents')
-          .update({ 
-            post_count: count || postCount,
-            last_seen_at: new Date().toISOString()
-          })
+          .update({ post_count: count })
           .eq('id', agentId);
       }
     }
 
-    // Update job with results
+    // Update job completion
     await supabaseAuth
       .from('scrape_jobs')
       .update({
@@ -622,15 +688,13 @@ Deno.serve(async (req) => {
         success: true,
         jobId: job.id,
         data: {
-          url: targetUrl,
+          pagesScraped,
           postsInserted,
           agentsInserted,
           submoltsInserted,
-          linksCount: links.length,
           rawPostsFound: parsedPosts.length,
           rawAgentsFound: parsedAgents.length,
           rawSubmoltsFound: parsedSubmolts.length,
-          metadata
         }
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
