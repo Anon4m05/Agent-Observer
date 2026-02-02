@@ -1,1 +1,10 @@
 project_id = "gneylxbdaudomvpivebw"
+
+[functions.moltbook-scrape]
+verify_jwt = false
+
+[functions.moltbook-agent]
+verify_jwt = false
+
+[functions.moltbook-observatory]
+verify_jwt = false

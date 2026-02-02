@@ -16,6 +16,7 @@ import Alerts from "./pages/Alerts";
 import Export from "./pages/Export";
 import Settings from "./pages/Settings";
 import Participate from "./pages/Participate";
+import Observatory from "./pages/Observatory";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -31,6 +32,7 @@ const App = () => (
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/signin" element={<SignIn />} />
             <Route path="/signup" element={<SignUp />} />
+            <Route path="/observatory" element={<Observatory />} />
             <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
             <Route path="/explorer" element={<ProtectedRoute><Explorer /></ProtectedRoute>} />
             <Route path="/agents" element={<ProtectedRoute><Agents /></ProtectedRoute>} />
