@@ -60,6 +60,24 @@ function extractTitle(block: string): string | null {
   return null;
 }
 
+// Junk submolt names to filter out
+const JUNK_SUBMOLTS = new Set(['post', 'privacy', 'developers', '_next', 'skill', 'u', 'm', 'api', 'static', 'admin', 'login', 'auth', 'assets', 'images', 'css', 'js']);
+
+// Clean a username by removing trailing 'u' that comes from parsing "u/usernameu/username" double patterns
+function cleanUsername(raw: string): string {
+  let clean = raw.toLowerCase().trim();
+  // Remove trailing 'u' if it looks like a parsing artifact (e.g., "kirniyscrabu" -> "kirniyscrab")
+  // Check if username ends with 'u' and removing it still leaves 2+ chars
+  if (clean.endsWith('u') && clean.length > 3) {
+    const withoutU = clean.slice(0, -1);
+    // Only remove if it doesn't break a common suffix like "-u" intentionally
+    if (!clean.match(/[-_]u$/)) {
+      clean = withoutU;
+    }
+  }
+  return clean;
+}
+
 // Parse post entries from markdown with improved patterns
 function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[] {
   const posts: ParsedPost[] = [];
@@ -73,9 +91,15 @@ function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[]
   while ((match = postBlockRegex.exec(markdown)) !== null) {
     const upvotes = parseInt(match[1], 10);
     const submolt = match[2].toLowerCase();
-    const username = match[3].toLowerCase();
+    const rawUsername = match[3];
     const title = match[4].trim();
     const commentCount = parseInt(match[5], 10);
+    
+    // Skip junk submolts
+    if (JUNK_SUBMOLTS.has(submolt)) continue;
+    
+    // Clean username
+    const username = cleanUsername(rawUsername);
     
     // Find the URL after this match
     const urlMatch = markdown.slice(match.index, match.index + match[0].length + 200).match(/\/post\/([a-f0-9-]+)/i);
@@ -123,17 +147,24 @@ function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[]
     const voteMatch = context.match(/▲(\d+)▼/);
     const upvotes = voteMatch ? parseInt(voteMatch[1], 10) : 0;
     
-    // Extract submolt
+    // Extract submolt - filter junk
     const submoltMatch = context.match(/m\/(\w{2,30})/);
-    const submolt = submoltMatch ? submoltMatch[1].toLowerCase() : null;
+    let submolt: string | null = null;
+    if (submoltMatch) {
+      const candidate = submoltMatch[1].toLowerCase();
+      if (!JUNK_SUBMOLTS.has(candidate)) {
+        submolt = candidate;
+      }
+    }
     
     // Extract username - need at least 2 chars, not common words
     const userMatch = context.match(/u\/([a-zA-Z0-9_-]{2,30})/);
     let username: string | null = null;
     if (userMatch) {
-      const candidate = userMatch[1].toLowerCase();
-      if (!['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago'].includes(candidate)) {
-        username = candidate;
+      const cleaned = cleanUsername(userMatch[1]);
+      const blocked = ['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago'];
+      if (!blocked.includes(cleaned) && cleaned.length >= 2) {
+        username = cleaned;
       }
     }
     
@@ -163,6 +194,7 @@ function parsePostsFromMarkdown(markdown: string, baseUrl: string): ParsedPost[]
 function parseAgentsFromMarkdown(markdown: string): ParsedAgent[] {
   const agents: ParsedAgent[] = [];
   const seenUsernames = new Set<string>();
+  const blocked = ['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago', 'post', 'comment', 'admin', 'user', 'api', 'static'];
   
   // Pattern for agent cards: Username with Twitter handle
   // Format: [Username\n\ntime ago\n\n@twitterhandle](url)
@@ -170,15 +202,16 @@ function parseAgentsFromMarkdown(markdown: string): ParsedAgent[] {
   
   let match;
   while ((match = agentCardRegex.exec(markdown)) !== null) {
-    const username = match[1].toLowerCase();
+    const rawUsername = match[1];
     const twitter = match[2] || null;
+    const username = cleanUsername(rawUsername);
     
-    if (!seenUsernames.has(username) && username.length >= 2) {
+    if (!seenUsernames.has(username) && username.length >= 2 && !blocked.includes(username)) {
       seenUsernames.add(username);
       agents.push({
         external_id: `agent_${username}`,
         username,
-        display_name: match[1], // Keep original case for display
+        display_name: rawUsername, // Keep original case for display
         twitter_handle: twitter,
       });
     }
@@ -192,8 +225,7 @@ function parseAgentsFromMarkdown(markdown: string): ParsedAgent[] {
   
   for (const pattern of userPatterns) {
     while ((match = pattern.exec(markdown)) !== null) {
-      const username = match[1].toLowerCase();
-      const blocked = ['the', 'and', 'for', 'you', 'are', 'was', 'has', 'this', 'that', 'with', 'ago', 'post', 'comment'];
+      const username = cleanUsername(match[1]);
       if (!seenUsernames.has(username) && username.length >= 2 && !blocked.includes(username)) {
         seenUsernames.add(username);
         agents.push({
@@ -223,6 +255,9 @@ function parseSubmoltsFromMarkdown(markdown: string): ParsedSubmolt[] {
     const name = match[1].toLowerCase();
     const memberCount = parseInt(match[2], 10);
     
+    // Skip junk submolts
+    if (JUNK_SUBMOLTS.has(name)) continue;
+    
     if (!seenNames.has(name)) {
       seenNames.add(name);
       submolts.push({
@@ -237,6 +272,10 @@ function parseSubmoltsFromMarkdown(markdown: string): ParsedSubmolt[] {
   const simplePattern = /m\/(\w{2,30})/gi;
   while ((match = simplePattern.exec(markdown)) !== null) {
     const name = match[1].toLowerCase();
+    
+    // Skip junk submolts
+    if (JUNK_SUBMOLTS.has(name)) continue;
+    
     if (!seenNames.has(name)) {
       seenNames.add(name);
       submolts.push({
