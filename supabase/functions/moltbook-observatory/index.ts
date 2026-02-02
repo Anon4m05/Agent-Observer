@@ -775,13 +775,14 @@ Deno.serve(async (req) => {
     }
 
     // Authentication - required for all endpoints
-    const obsKey = req.headers.get('x-observatory-key');
+    // Accept auth via header OR query param
+    const obsKey = req.headers.get('x-observatory-key') || url.searchParams.get('key');
     const expectedKey = Deno.env.get('CLAUDE_OBSERVATORY_KEY');
 
     if (!obsKey || obsKey !== expectedKey) {
       console.log(`Auth failed for IP: ${clientIP}`);
       return errorResponse(
-        'Authentication required. Provide valid x-observatory-key header.',
+        'Authentication required. Provide valid x-observatory-key header or key query parameter.',
         'UNAUTHORIZED',
         401
       );
