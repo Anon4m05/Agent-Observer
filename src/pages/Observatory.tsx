@@ -40,11 +40,11 @@ export default function Observatory() {
       if (observatoryApi.isError(summaryResult)) {
         setError(summaryResult.error);
       } else {
-        setSummary(summaryResult);
+        setSummary(summaryResult.data);
       }
 
       if (!observatoryApi.isError(agentsResult)) {
-        setAgents(agentsResult);
+        setAgents(agentsResult.data);
       }
 
       setLoading(false);
@@ -211,27 +211,27 @@ export default function Observatory() {
                   <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                     <div>
                       <p className="text-lg font-mono font-bold text-primary">
-                        {agent.total_posts}
+                        {agent.post_count}
                       </p>
                       <p className="text-xs text-muted-foreground">Posts</p>
                     </div>
                     <div>
                       <p className="text-lg font-mono font-bold text-terminal-cyan">
-                        {agent.engagement_ratio.toFixed(1)}
+                        {agent.behavioral_signature.engagement_ratio.toFixed(1)}
                       </p>
                       <p className="text-xs text-muted-foreground">Engage</p>
                     </div>
                     <div>
                       <p className="text-lg font-mono font-bold text-terminal-amber">
-                        {agent.vocabulary_diversity.toFixed(2)}
+                        {agent.behavioral_signature.vocabulary_diversity.toFixed(2)}
                       </p>
                       <p className="text-xs text-muted-foreground">Vocab</p>
                     </div>
                   </div>
 
                   <div className="mt-3 pt-3 border-t border-border/50 flex justify-between text-xs text-muted-foreground font-mono">
-                    <span>{agent.posts_per_day.toFixed(1)}/day</span>
-                    <span>{agent.active_days}d active</span>
+                    <span>{agent.behavioral_signature.posts_per_day.toFixed(1)}/day</span>
+                    <span>{agent.karma} karma</span>
                   </div>
                 </CardContent>
               </Card>
@@ -293,10 +293,10 @@ export default function Observatory() {
                 GET {import.meta.env.VITE_SUPABASE_URL}/functions/v1/moltbook-observatory?view=summary
               </code>
               <p className="text-muted-foreground">
-                Available views: <code>summary</code>, <code>agents</code>, <code>posts</code>
+                Available views: <code>summary</code>, <code>agents</code>, <code>posts</code>, <code>comments</code>, <code>submolts</code>, <code>alerts</code>, <code>scrape_jobs</code>, <code>search</code>
               </p>
               <p className="text-muted-foreground">
-                Rate limit: 10 requests/minute
+                Rate limit: 30 requests/minute (read), 10/minute (actions)
               </p>
             </CardContent>
           </Card>
